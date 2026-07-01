@@ -41,10 +41,10 @@
   <text x="105" y="360" font-family="Arial, sans-serif" font-size="16" fill="#334155">save_video()</text>
 
   <text x="685" y="205" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="#334155">核心接口</text>
-  <text x="685" y="240" font-family="Arial, sans-serif" font-size="16" fill="#334155">health()</text>
-  <text x="685" y="270" font-family="Arial, sans-serif" font-size="16" fill="#334155">metadata()</text>
-  <text x="685" y="300" font-family="Arial, sans-serif" font-size="16" fill="#334155">reset_episode(task_info)</text>
-  <text x="685" y="330" font-family="Arial, sans-serif" font-size="16" fill="#334155">predict_action(obs)</text>
+  <text x="685" y="240" font-family="Arial, sans-serif" font-size="16" fill="#334155">check_service_ready()</text>
+  <text x="685" y="270" font-family="Arial, sans-serif" font-size="16" fill="#334155">fetch_model_metadata()</text>
+  <text x="685" y="300" font-family="Arial, sans-serif" font-size="16" fill="#334155">reset_model_for_episode(task)</text>
+  <text x="685" y="330" font-family="Arial, sans-serif" font-size="16" fill="#334155">request_action_prediction(obs)</text>
 
   <line x1="445" y1="190" x2="635" y2="190" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow-gray)"/>
   <rect x="476" y="169" width="128" height="34" rx="17" fill="#ffffff" stroke="#cbd5e1"/>
@@ -62,7 +62,7 @@
 
   <line x1="445" y1="410" x2="635" y2="410" stroke="#475569" stroke-width="2.5" marker-end="url(#arrow-gray)"/>
   <rect x="462" y="389" width="156" height="34" rx="17" fill="#ffffff" stroke="#cbd5e1"/>
-  <text x="540" y="411" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#334155">reset_episode(task)</text>
+  <text x="540" y="411" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#334155">reset_model_for_episode(task)</text>
 
   <text x="540" y="505" text-anchor="middle" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#0f172a">
     主循环：LIBERO 产生 obs → VLA 预测 action → LIBERO 执行动作并判断成功

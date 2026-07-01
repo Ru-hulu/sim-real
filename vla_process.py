@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import base64
+import json
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib import error, request
+from urllib.parse import urljoin
 
 from libero_evaluator import Action, Observation, TaskInfo
 
@@ -13,20 +16,82 @@ VLA_PAYLOAD_SCHEMA_VERSION = 1
 
 
 class VLAClient(Protocol):
-    def health(self) -> bool:
+    def check_service_ready(self) -> bool:
         """Return True when the model service is ready."""
 
-    def metadata(self) -> dict[str, Any]:
+    def fetch_model_metadata(self) -> dict[str, Any]:
         """Return model input/output conventions."""
 
-    def reset_episode(self, task: TaskInfo) -> None:
+    def reset_model_for_episode(self, task: TaskInfo) -> None:
         """Reset model-side recurrent state or action chunk cache."""
 
-    def predict_action(self, observation: Observation) -> Action:
+    def request_action_prediction(self, observation: Observation) -> Action:
         """Return one LIBERO-compatible action."""
 
     def close(self) -> None:
         """Release client resources."""
+
+
+@dataclass
+class HTTPVLAClient:
+    base_url: str
+    timeout: float = 30.0
+    closed: bool = False
+
+    def check_service_ready(self) -> bool:
+        if self.closed:
+            return False
+
+        try:
+            payload = self._request_json("GET", "/health")
+        except (OSError, error.URLError, TimeoutError):
+            return False
+        return bool(payload.get("ok", False))
+
+    def fetch_model_metadata(self) -> dict[str, Any]:
+        self._ensure_open()
+        return self._request_json("GET", "/metadata")
+
+    def reset_model_for_episode(self, task: TaskInfo) -> None:
+        self._ensure_open()
+        self._request_json("POST", "/reset_episode", task_to_payload(task))
+
+    def request_action_prediction(self, observation: Observation) -> Action:
+        self._ensure_open()
+        payload = self._request_json("POST", "/predict_action", observation_to_payload(observation))
+        return payload_to_action(payload)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def _ensure_open(self) -> None:
+        if self.closed:
+            raise RuntimeError("HTTPVLAClient is closed")
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        body = None
+        headers = {"Accept": "application/json"}
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
+        req = request.Request(
+            urljoin(self.base_url.rstrip("/") + "/", path.lstrip("/")),
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        with request.urlopen(req, timeout=self.timeout) as response:
+            response_body = response.read()
+
+        if not response_body:
+            return {}
+        return json.loads(response_body.decode("utf-8"))
 
 
 def task_to_payload(task: TaskInfo) -> dict[str, Any]:
@@ -90,10 +155,10 @@ class DummyVLAClient:
     num_predictions: int = 0
     closed: bool = False
 
-    def health(self) -> bool:
+    def check_service_ready(self) -> bool:
         return not self.closed
 
-    def metadata(self) -> dict[str, Any]:
+    def fetch_model_metadata(self) -> dict[str, Any]:
         return {
             "name": "dummy-vla",
             "schema_version": VLA_PAYLOAD_SCHEMA_VERSION,
@@ -104,11 +169,11 @@ class DummyVLAClient:
             "uses_model": False,
         }
 
-    def reset_episode(self, task: TaskInfo) -> None:
+    def reset_model_for_episode(self, task: TaskInfo) -> None:
         self.current_task = task
         self.num_predictions = 0
 
-    def predict_action(self, observation: Observation) -> Action:
+    def request_action_prediction(self, observation: Observation) -> Action:
         if self.closed:
             raise RuntimeError("DummyVLAClient is closed")
         if len(self.action_values) != 7:

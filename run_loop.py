@@ -10,7 +10,7 @@ from vla_process import VLAClient
 
 def run_step(evaluator: LIBEROEvaluator, policy: VLAClient, step: int) -> None:
     observation = evaluator.get_observation(step=step)
-    action = policy.predict_action(observation)
+    action = policy.request_action_prediction(observation)
     evaluator.step(action)
 
 
@@ -22,7 +22,7 @@ def run_episode(
     seed: int,
 ) -> bool:
     task = evaluator.reset_task(task_id=task_id, episode_id=episode_id, seed=seed)
-    policy.reset_episode(task)
+    policy.reset_model_for_episode(task)
 
     step = 0
     while not evaluator.is_success() and not evaluator.is_timeout():
@@ -42,11 +42,11 @@ def run_benchmark(
     episodes_per_task: int,
     seed: int,
 ) -> dict[str, Any]:
-    if not policy.health():
+    if not policy.check_service_ready():
         raise RuntimeError("VLA service is not ready")
 
     evaluator.load_suite(suite)
-    model_info = policy.metadata()
+    model_info = policy.fetch_model_metadata()
 
     total = 0
     successes = 0
