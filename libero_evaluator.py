@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import math
 import os
 import pathlib
@@ -306,3 +307,72 @@ class RealLIBEROEvaluator:
 
         scale = 2.0 * math.acos(clipped_w) / denominator
         return [quat[0] * scale, quat[1] * scale, quat[2] * scale]
+
+
+def run_self_test(
+    suite: str,
+    task_id: int,
+    episode_id: int,
+    seed: int,
+    max_steps: int,
+    output_dir: pathlib.Path,
+    libero_home: pathlib.Path | None,
+) -> dict[str, Any]:
+    evaluator = RealLIBEROEvaluator(
+        LIBEROEvaluatorConfig(
+            output_dir=output_dir,
+            libero_home=libero_home,
+            max_steps=max_steps,
+        )
+    )
+    evaluator.load_suite(suite)
+    task = evaluator.reset_task(task_id=task_id, episode_id=episode_id, seed=seed)
+
+    dummy_action = Action([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
+    while not evaluator.is_success() and not evaluator.is_timeout():
+        evaluator.get_observation(step=evaluator.current_step)
+        evaluator.step(dummy_action)
+
+    success = evaluator.is_success()
+    evaluator.save_video(task=task, success=success)
+    result = {
+        "suite": suite,
+        "task_id": task_id,
+        "episode_id": episode_id,
+        "instruction": task.instruction,
+        "success": success,
+        "timeout": evaluator.is_timeout(),
+        "steps": evaluator.current_step,
+        "frames": len(evaluator.replay_images),
+        "output_dir": str(evaluator.current_episode_dir),
+    }
+    evaluator._clear_current_task()
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run a LIBERO evaluator self-test with dummy actions.")
+    parser.add_argument("--suite", default="libero_goal")
+    parser.add_argument("--task-id", type=int, default=0)
+    parser.add_argument("--episode-id", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--max-steps", type=int, default=3)
+    parser.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("outputs/libero_self_test"))
+    parser.add_argument("--libero-home", type=pathlib.Path, default=None)
+    args = parser.parse_args()
+
+    result = run_self_test(
+        suite=args.suite,
+        task_id=args.task_id,
+        episode_id=args.episode_id,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        output_dir=args.output_dir,
+        libero_home=args.libero_home,
+    )
+    for key, value in result.items():
+        print(f"{key}: {value}")
+
+
+if __name__ == "__main__":
+    main()
