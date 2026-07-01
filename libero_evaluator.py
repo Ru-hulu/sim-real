@@ -89,6 +89,9 @@ class RealLIBEROEvaluator:
         self.current_obs: dict[str, Any] | None = None
         self.current_episode_dir: pathlib.Path | None = None
         self.current_step = 0
+        self.current_done = False
+        self.current_reward: float | None = None
+        self.current_info: dict[str, Any] | None = None
         self.replay_images: list[Any] = []
 
     @staticmethod
@@ -151,6 +154,9 @@ class RealLIBEROEvaluator:
         self.current_env = self._create_env(task_spec=task_spec, seed=seed)
         self.current_obs = self._reset_env_to_initial_state(initial_states[episode_id])
         self.current_step = 0
+        self.current_done = False
+        self.current_reward = None
+        self.current_info = None
         self.replay_images = []
         self.current_episode_dir = self._episode_output_dir(task)
         self.current_episode_dir.mkdir(parents=True, exist_ok=True)
@@ -174,16 +180,36 @@ class RealLIBEROEvaluator:
         )
 
     def step(self, action: Action) -> None:
-        raise NotImplementedError("Simulation stepping will be implemented next.")
+        if self.current_env is None:
+            raise RuntimeError("No LIBERO env exists. Call reset_task() first.")
+        if len(action.values) != 7:
+            raise ValueError(f"LIBERO action must have 7 values, got {len(action.values)}")
+
+        obs, reward, done, info = self.current_env.step([float(value) for value in action.values])
+        self.current_obs = obs
+        self.current_reward = float(reward)
+        self.current_done = bool(done)
+        self.current_info = dict(info) if isinstance(info, dict) else {"raw_info": info}
+        self.current_step += 1
 
     def is_success(self) -> bool:
-        raise NotImplementedError("Success checking will be implemented next.")
+        return self.current_done
 
     def is_timeout(self) -> bool:
-        raise NotImplementedError("Timeout checking will be implemented next.")
+        return self.current_step >= self.config.max_steps
 
     def save_video(self, task: TaskInfo, success: bool) -> None:
-        raise NotImplementedError("Video saving will be implemented next.")
+        if self.current_episode_dir is None:
+            raise RuntimeError("No episode output directory exists. Call reset_task() first.")
+        if not self.replay_images:
+            raise RuntimeError("No replay images available. Call get_observation() during rollout.")
+
+        import imageio.v2 as imageio
+
+        status = "success" if success else "failure"
+        instruction = "_".join(task.instruction.lower().split())
+        video_path = self.current_episode_dir / f"rollout_{instruction}_{status}.mp4"
+        imageio.mimwrite(video_path, self.replay_images, fps=10)
 
     def _clear_current_task(self) -> None:
         self._close_current_env()
@@ -191,6 +217,9 @@ class RealLIBEROEvaluator:
         self.current_obs = None
         self.current_episode_dir = None
         self.current_step = 0
+        self.current_done = False
+        self.current_reward = None
+        self.current_info = None
         self.replay_images = []
 
     def _require_loaded_suite(self) -> tuple[str, Any]:
