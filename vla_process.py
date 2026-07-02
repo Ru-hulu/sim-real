@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib import error, request
 from urllib.parse import urljoin
@@ -14,7 +14,7 @@ from libero_evaluator import Action, Observation, TaskInfo
 
 VLA_PAYLOAD_SCHEMA_VERSION = 1
 
-
+# 仅做接口定义，无具体实现。
 class VLAClient(Protocol):
     def check_service_ready(self) -> bool:
         """Return True when the model service is ready."""
@@ -31,7 +31,7 @@ class VLAClient(Protocol):
     def close(self) -> None:
         """Release client resources."""
 
-
+# 向模型请求推理，获得动作
 @dataclass
 class HTTPVLAClient:
     base_url: str
@@ -106,15 +106,23 @@ def task_to_payload(task: TaskInfo) -> dict[str, Any]:
 
 
 def observation_to_payload(observation: Observation) -> dict[str, Any]:
+    images = {
+        "agentview": array_to_payload(observation.agentview_image),
+        "wrist": array_to_payload(observation.wrist_image),
+    }
+    images.update(array_dict_to_payload(observation.extra_images))
+
     return {
         "schema_version": VLA_PAYLOAD_SCHEMA_VERSION,
         "instruction": observation.instruction,
         "step": observation.step,
         "robot_state": [float(value) for value in observation.robot_state],
-        "images": {
-            "agentview": image_to_payload(observation.agentview_image),
-            "wrist": image_to_payload(observation.wrist_image),
-        },
+        "robot_joint_state": vector_dict_to_payload(observation.robot_joint_state),
+        "gripper_state": vector_dict_to_payload(observation.gripper_state),
+        "robot_proprio_state": vector_dict_to_payload(observation.robot_proprio_state),
+        "images": images,
+        "depth_maps": array_dict_to_payload(observation.depth_maps),
+        "segmentation_maps": array_dict_to_payload(observation.segmentation_maps),
     }
 
 
@@ -129,15 +137,23 @@ def payload_to_action(payload: dict[str, Any]) -> Action:
     return Action(_validated_action_values(payload["action"]))
 
 
-def image_to_payload(image: Any) -> dict[str, Any]:
-    if not hasattr(image, "shape") or not hasattr(image, "dtype") or not hasattr(image, "tobytes"):
-        raise TypeError("Image must expose shape, dtype, and tobytes() for JSON serialization")
+def vector_dict_to_payload(items: dict[str, list[float]]) -> dict[str, list[float]]:
+    return {key: [float(value) for value in values] for key, values in items.items()}
 
-    raw_bytes = image.tobytes()
+
+def array_dict_to_payload(items: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {key: array_to_payload(value) for key, value in items.items()}
+
+
+def array_to_payload(value: Any) -> dict[str, Any]:
+    if not hasattr(value, "shape") or not hasattr(value, "dtype") or not hasattr(value, "tobytes"):
+        raise TypeError("Array must expose shape, dtype, and tobytes() for JSON serialization")
+
+    raw_bytes = value.tobytes()
     return {
         "encoding": "raw_base64",
-        "shape": [int(value) for value in image.shape],
-        "dtype": str(image.dtype),
+        "shape": [int(item) for item in value.shape],
+        "dtype": str(value.dtype),
         "data": base64.b64encode(raw_bytes).decode("ascii"),
     }
 
@@ -146,41 +162,3 @@ def _validated_action_values(values: list[float]) -> list[float]:
     if len(values) != 7:
         raise ValueError(f"VLA action must have 7 values, got {len(values)}")
     return [float(value) for value in values]
-
-
-@dataclass
-class DummyVLAClient:
-    action_values: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
-    current_task: TaskInfo | None = None
-    num_predictions: int = 0
-    closed: bool = False
-
-    def check_service_ready(self) -> bool:
-        return not self.closed
-
-    def fetch_model_metadata(self) -> dict[str, Any]:
-        return {
-            "name": "dummy-vla",
-            "schema_version": VLA_PAYLOAD_SCHEMA_VERSION,
-            "action_dim": 7,
-            "action_format": "[dx, dy, dz, droll, dpitch, dyaw, gripper]",
-            "image_keys": ["agentview", "wrist"],
-            "state_dim": 8,
-            "uses_model": False,
-        }
-
-    def reset_model_for_episode(self, task: TaskInfo) -> None:
-        self.current_task = task
-        self.num_predictions = 0
-
-    def request_action_prediction(self, observation: Observation) -> Action:
-        if self.closed:
-            raise RuntimeError("DummyVLAClient is closed")
-        if len(self.action_values) != 7:
-            raise ValueError(f"Dummy action must have 7 values, got {len(self.action_values)}")
-
-        self.num_predictions += 1
-        return Action([float(value) for value in self.action_values])
-
-    def close(self) -> None:
-        self.closed = True

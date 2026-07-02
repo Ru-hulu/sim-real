@@ -46,6 +46,13 @@ def model_metadata() -> dict[str, Any]:
         "action_format": "[dx, dy, dz, droll, dpitch, dyaw, gripper]",
         "image_keys": ["agentview", "wrist"],
         "state_dim": 8,
+        "optional_observation_keys": [
+            "robot_joint_state",
+            "gripper_state",
+            "robot_proprio_state",
+            "depth_maps",
+            "segmentation_maps",
+        ],
         "uses_model": False,
         "num_predictions": _num_predictions,
     }
@@ -65,6 +72,10 @@ def validate_observation_payload(payload: dict[str, Any]) -> None:
     images = payload["images"]
     if not isinstance(images, dict):
         raise TypeError("Observation images must be an object")
+
+    for key in ("robot_joint_state", "gripper_state", "robot_proprio_state", "depth_maps", "segmentation_maps"):
+        if key in payload and not isinstance(payload[key], dict):
+            raise TypeError(f"Observation {key} must be an object")
 
 
 class DummyVLARequestHandler(BaseHTTPRequestHandler):
@@ -92,7 +103,6 @@ class DummyVLARequestHandler(BaseHTTPRequestHandler):
         if path not in {"/reset_episode", "/predict_action"}:
             self.send_error(404, f"Unknown endpoint: {path}")
             return
-
         try:
             payload = self._read_json()
             if path == "/reset_episode":

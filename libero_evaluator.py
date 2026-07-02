@@ -7,12 +7,12 @@ import math
 import os
 import pathlib
 import sys
-from dataclasses import dataclass
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol
 
 
 @dataclass(frozen=True)
-class LIBEROEvaluatorConfig:
+class LIBEROSimulationRuntimeConfig:
     output_dir: pathlib.Path
     libero_home: pathlib.Path | None = None
     mujoco_gl: str = "egl"
@@ -37,6 +37,12 @@ class Observation:
     wrist_image: Any
     robot_state: list[float]
     step: int
+    robot_joint_state: dict[str, list[float]] = field(default_factory=dict)
+    gripper_state: dict[str, list[float]] = field(default_factory=dict)
+    robot_proprio_state: dict[str, list[float]] = field(default_factory=dict)
+    extra_images: dict[str, Any] = field(default_factory=dict)
+    depth_maps: dict[str, Any] = field(default_factory=dict)
+    segmentation_maps: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -66,15 +72,17 @@ class LIBEROEvaluator(Protocol):
     def save_video(self, task: TaskInfo, success: bool) -> None:
         """Persist rollout video."""
 
+# def step：拿到动作以后，仿真环境如何更新
+# def get_observation：从仿真环境中获取机器人的状态与观测
+# load_suite 具体采用哪个测试套
+class LIBEROSimulationRuntime:
+    """Concrete simulation runtime for LIBERO.
 
-class RealLIBEROEvaluator:
-    """Concrete evaluator process owner for LIBERO.
-
-    Owns LIBERO process initialization, benchmark selection, task reset, and
-    observation extraction.
+    Owns LIBERO process initialization, benchmark selection, simulation reset,
+    action stepping, observation extraction, and rollout video persistence.
     """
 
-    def __init__(self, config: LIBEROEvaluatorConfig) -> None:
+    def __init__(self, config: LIBEROSimulationRuntimeConfig) -> None:
         self.config = config
         self.output_dir = config.output_dir.expanduser().resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +104,7 @@ class RealLIBEROEvaluator:
         self.replay_images: list[Any] = []
 
     @staticmethod
-    def _configure_process_environment(config: LIBEROEvaluatorConfig) -> None:
+    def _configure_process_environment(config: LIBEROSimulationRuntimeConfig) -> None:
         os.environ["MUJOCO_GL"] = config.mujoco_gl
         os.environ["PYOPENGL_PLATFORM"] = config.pyopengl_platform
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -178,6 +186,12 @@ class RealLIBEROEvaluator:
             wrist_image=wrist_image,
             robot_state=robot_state,
             step=step,
+            robot_joint_state=self._collect_robot_vector_state(obs, "joint"),
+            gripper_state=self._collect_robot_vector_state(obs, "gripper"),
+            robot_proprio_state=self._collect_robot_vector_state(obs, "proprio"),
+            extra_images=self._collect_extra_images(obs),
+            depth_maps=self._collect_depth_maps(obs),
+            segmentation_maps=self._collect_segmentation_maps(obs),
         )
 
     def step(self, action: Action) -> None:
@@ -274,10 +288,7 @@ class RealLIBEROEvaluator:
     def _extract_image(obs: dict[str, Any], key: str) -> Any:
         if key not in obs:
             raise KeyError(f"LIBERO observation does not contain image key '{key}'")
-        image = obs[key][::-1, ::-1]
-        if hasattr(image, "copy"):
-            return image.copy()
-        return image
+        return LIBEROSimulationRuntime._copy_spatial_array(obs[key])
 
     @classmethod
     def _extract_robot_state(cls, obs: dict[str, Any]) -> list[float]:
@@ -290,10 +301,56 @@ class RealLIBEROEvaluator:
     def _obs_vector(obs: dict[str, Any], key: str) -> list[float]:
         if key not in obs:
             raise KeyError(f"LIBERO observation does not contain state key '{key}'")
-        value = obs[key]
+        return LIBEROSimulationRuntime._value_to_float_list(obs[key])
+
+    @staticmethod
+    def _value_to_float_list(value: Any) -> list[float]:
         if hasattr(value, "reshape"):
             value = value.reshape(-1)
         return [float(item) for item in value]
+
+    @staticmethod
+    def _is_array_like(value: Any) -> bool:
+        return hasattr(value, "shape") and hasattr(value, "dtype") and hasattr(value, "tobytes")
+
+    @staticmethod
+    def _copy_spatial_array(value: Any) -> Any:
+        copied = value[::-1, ::-1]
+        if hasattr(copied, "copy"):
+            return copied.copy()
+        return copied
+
+    @classmethod
+    def _collect_robot_vector_state(cls, obs: dict[str, Any], name_fragment: str) -> dict[str, list[float]]:
+        return {
+            key: cls._value_to_float_list(value)
+            for key, value in obs.items()
+            if key.startswith("robot") and name_fragment in key and cls._is_array_like(value)
+        }
+
+    @classmethod
+    def _collect_extra_images(cls, obs: dict[str, Any]) -> dict[str, Any]:
+        primary_image_keys = {"agentview_image", "robot0_eye_in_hand_image"}
+        return cls._collect_spatial_arrays(
+            obs,
+            lambda key: key.endswith("_image") and key not in primary_image_keys,
+        )
+
+    @classmethod
+    def _collect_depth_maps(cls, obs: dict[str, Any]) -> dict[str, Any]:
+        return cls._collect_spatial_arrays(obs, lambda key: "depth" in key)
+
+    @classmethod
+    def _collect_segmentation_maps(cls, obs: dict[str, Any]) -> dict[str, Any]:
+        return cls._collect_spatial_arrays(obs, lambda key: "segmentation" in key)
+
+    @classmethod
+    def _collect_spatial_arrays(cls, obs: dict[str, Any], key_matches: Callable[[str], bool]) -> dict[str, Any]:
+        return {
+            key: cls._copy_spatial_array(value)
+            for key, value in obs.items()
+            if key_matches(key) and cls._is_array_like(value)
+        }
 
     @staticmethod
     def _quat_to_axis_angle(quat: list[float]) -> list[float]:
@@ -318,8 +375,8 @@ def run_self_test(
     output_dir: pathlib.Path,
     libero_home: pathlib.Path | None,
 ) -> dict[str, Any]:
-    evaluator = RealLIBEROEvaluator(
-        LIBEROEvaluatorConfig(
+    evaluator = LIBEROSimulationRuntime(
+        LIBEROSimulationRuntimeConfig(
             output_dir=output_dir,
             libero_home=libero_home,
             max_steps=max_steps,
